@@ -1,0 +1,77 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lite Digital Human Lab</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="orb orb-a"></div>
+  <div class="orb orb-b"></div>
+  <div class="grain"></div>
+
+  <header class="hero shell">
+    <div>
+      <div class="eyebrow">Stage 1 / local demo skeleton</div>
+      <h1>本地实时口播数字人 Demo</h1>
+      <p class="lede">先把文本、TTS、预览视频和控制台连成闭环，后续再接入 LiveTalking、MuseTalk、Wav2Lip 和 CosyVoice。</p>
+    </div>
+    <div class="hero-badge">
+      <span class="dot"></span>
+      <span id="connection-state">LOCAL SERVER</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel composer shell">
+      <div class="section-head">
+        <h2>播报文案</h2>
+        <p>先手动输入一段文案，验证端到端生成链路。</p>
+      </div>
+
+      <label class="field-label" for="script-input">口播文本</label>
+      <textarea id="script-input" spellcheck="false"></textarea>
+
+      <div class="sample-row" id="sample-row"></div>
+
+      <div class="actions">
+        <button id="speak-btn" class="primary">开始播报</button>
+        <button id="stop-btn" class="secondary">停止</button>
+      </div>
+
+      <div class="stage-card">
+        <div class="stage-title">处理阶段</div>
+        <div class="stage-list" id="stage-list"></div>
+      </div>
+    </section>
+
+    <section class="panel preview shell">
+      <div class="section-head">
+        <h2>预览</h2>
+        <p>生成完成后，这里会加载本地 mp4 预览。</p>
+      </div>
+
+      <div class="video-frame">
+        <video id="preview-video" controls playsinline></video>
+        <div class="video-empty" id="video-empty">等待任务开始。生成完成后会显示预览视频。</div>
+      </div>
+
+      <div class="metrics-grid" id="metrics-grid"></div>
+    </section>
+  </main>
+
+  <section class="panel queue shell">
+    <div class="section-head split">
+      <div>
+        <h2>任务队列</h2>
+        <p>最近的生成任务会按时间倒序展示。</p>
+      </div>
+      <div class="clock" id="clock"></div>
+    </div>
+    <div id="jobs-list" class="jobs-list"></div>
+  </section>
+
+  <script src="/app.js"></script>
+</body>
+</html>
