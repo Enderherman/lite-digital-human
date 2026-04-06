@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import re
@@ -6,12 +6,22 @@ import time
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 class JobStatus(str, Enum):
     queued = "queued"
     running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class PipelineStage(str, Enum):
+    queued = "queued"
+    tts = "tts"
+    lip_sync = "lip_sync"
+    encode = "encode"
     succeeded = "succeeded"
     failed = "failed"
     cancelled = "cancelled"
@@ -58,12 +68,12 @@ def read_wav_duration(path: Path) -> float:
         return frames / float(rate or 1)
 
 
-def split_chunks(text: str) -> list[str]:
+def split_chunks(text: str) -> List[str]:
     chunks = [chunk.strip() for chunk in re.split(r"[\u3002\uff01\uff1f!?;\uff1b,\n]+", text) if chunk.strip()]
     return chunks or [text.strip() or "Hello from the local demo."]
 
 
-def find_first_existing(paths: list[Path]) -> Optional[Path]:
+def find_first_existing(paths: List[Path]) -> Optional[Path]:
     for path in paths:
         if path.exists():
             return path
@@ -74,6 +84,8 @@ def find_first_existing(paths: list[Path]) -> Optional[Path]:
 class AppConfig:
     root_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[1])
     outputs_dir: Path = field(init=False)
+    assets_dir: Path = field(init=False)
+    models_dir: Path = field(init=False)
     web_dir: Path = field(init=False)
     preview_width: int = 720
     preview_height: int = 1280
@@ -87,11 +99,15 @@ class AppConfig:
 
     def __post_init__(self) -> None:
         self.outputs_dir = self.root_dir / "outputs"
+        self.assets_dir = self.root_dir / "assets"
+        self.models_dir = self.root_dir / "models"
         self.web_dir = self.root_dir / "web"
 
     def apply_env(self) -> "AppConfig":
         self.root_dir = Path(os.getenv("DHD_ROOT_DIR", str(self.root_dir))).resolve()
         self.outputs_dir = Path(os.getenv("DHD_OUTPUTS_DIR", str(self.root_dir / "outputs"))).resolve()
+        self.assets_dir = Path(os.getenv("DHD_ASSETS_DIR", str(self.root_dir / "assets"))).resolve()
+        self.models_dir = Path(os.getenv("DHD_MODELS_DIR", str(self.root_dir / "models"))).resolve()
         self.web_dir = Path(os.getenv("DHD_WEB_DIR", str(self.root_dir / "web"))).resolve()
         self.preview_width = _env_int("DHD_PREVIEW_WIDTH", self.preview_width)
         self.preview_height = _env_int("DHD_PREVIEW_HEIGHT", self.preview_height)
@@ -106,6 +122,8 @@ class AppConfig:
 
     def ensure_dirs(self) -> None:
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
+        self.assets_dir.mkdir(parents=True, exist_ok=True)
+        self.models_dir.mkdir(parents=True, exist_ok=True)
         self.web_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -120,6 +138,7 @@ class JobRecord:
     job_id: str
     text: str
     status: JobStatus
+    stage: PipelineStage
     created_at: float
     updated_at: float
     started_at: Optional[float] = None
@@ -129,14 +148,20 @@ class JobRecord:
     video_file: str = "preview.mp4"
     manifest_file: str = "manifest.json"
     backend: str = ""
+    speech_backend: str = ""
+    video_backend: str = ""
+    stage_detail: str = ""
     error: str = ""
     tts_ms: float = 0.0
+    lip_sync_ms: float = 0.0
+    encode_ms: float = 0.0
     render_ms: float = 0.0
     total_ms: float = 0.0
 
     def to_dict(self) -> Dict[str, object]:
         data = asdict(self)
         data["status"] = self.status.value
+        data["stage"] = self.stage.value
         data["created_at_iso"] = time_iso(self.created_at)
         data["updated_at_iso"] = time_iso(self.updated_at)
         data["started_at_iso"] = time_iso(self.started_at) if self.started_at else ""
@@ -153,6 +178,8 @@ class MetricsSnapshot:
     cancelled: int
     total_jobs: int
     average_tts_ms: float
+    average_lip_sync_ms: float
+    average_encode_ms: float
     average_render_ms: float
     average_total_ms: float
     active_job_id: str = ""

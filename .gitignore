@@ -15,3 +15,8 @@ outputs/*
 !outputs/.gitkeep
 backend/__pycache__/
 
+# 本地运行产物和外部仓库
+.cache/
+.mkl_bin/
+_wheels/
+models/CosyVoice/

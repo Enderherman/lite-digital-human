@@ -1,4 +1,4 @@
-﻿const SAMPLE_SCRIPTS = [
+const SAMPLE_SCRIPTS = [
   "大家好，欢迎来到本地数字人 Demo。我们先把文本、语音和视频预览跑通，下一步再接入 MuseTalk 和 CosyVoice。",
   "今天先展示一个可运行的最小闭环：输入文案，生成语音，再输出一个可预览的视频文件。",
   "后续我们会把 ASR、商品话术和直播推流逐步补进来，但第一步先把链路稳定住。"
@@ -52,7 +52,7 @@ function stageStates(job) {
       ["输入脚本", "ready"],
       ["TTS 生成", "idle"],
       ["口型合成", "idle"],
-      ["预览输出", "idle"],
+      ["最终编码", "idle"],
     ];
   }
   if (job.status === "queued") {
@@ -60,15 +60,16 @@ function stageStates(job) {
       ["输入脚本", "done"],
       ["TTS 生成", "queued"],
       ["口型合成", "queued"],
-      ["预览输出", "queued"],
+      ["最终编码", "queued"],
     ];
   }
   if (job.status === "running") {
+    const stage = job.stage || "tts";
     return [
       ["输入脚本", "done"],
-      ["TTS 生成", "running"],
-      ["口型合成", "running"],
-      ["预览输出", "running"],
+      ["TTS 生成", stage === "tts" ? "running" : "done"],
+      ["口型合成", stage === "lip_sync" ? "running" : stage === "encode" ? "done" : stage === "tts" ? "queued" : "done"],
+      ["最终编码", stage === "encode" ? "running" : stage === "lip_sync" ? "queued" : "queued"],
     ];
   }
   if (job.status === "succeeded") {
@@ -76,14 +77,14 @@ function stageStates(job) {
       ["输入脚本", "done"],
       ["TTS 生成", "done"],
       ["口型合成", "done"],
-      ["预览输出", "done"],
+      ["最终编码", "done"],
     ];
   }
   return [
     ["输入脚本", "done"],
     ["TTS 生成", job.status],
     ["口型合成", job.status],
-    ["预览输出", job.status],
+    ["最终编码", job.status],
   ];
 }
 
@@ -117,7 +118,8 @@ function renderMetrics(metrics) {
     metricCard("总任务数", metrics.total_jobs ?? 0),
     metricCard("运行中", metrics.running ?? 0),
     metricCard("平均 TTS", formatMs(metrics.average_tts_ms)),
-    metricCard("平均合成", formatMs(metrics.average_render_ms)),
+    metricCard("平均口型", formatMs(metrics.average_lip_sync_ms)),
+    metricCard("平均编码", formatMs(metrics.average_encode_ms)),
     metricCard("平均总耗时", formatMs(metrics.average_total_ms)),
     metricCard("活跃任务", metrics.active_job_id || "-"),
   ].join("");
@@ -132,14 +134,17 @@ function renderJobs(jobs) {
     .map((job) => {
       const isCurrent = job.job_id === appState.currentJobId;
       const badgeClass = job.status || "queued";
+      const backend = [job.speech_backend, job.video_backend].filter(Boolean).join(" -> ") || job.backend || "-";
       return `
         <article class="job-item">
           <div>
             <div class="job-id">${job.job_id}${isCurrent ? "  ·  active" : ""}</div>
             <div class="job-meta">
-              ${formatTime(job.created_at_iso)} · TTS ${formatMs(job.tts_ms)} · 合成 ${formatMs(job.render_ms)} · 总计 ${formatMs(job.total_ms)}
+              ${formatTime(job.created_at_iso)} · TTS ${formatMs(job.tts_ms)} · 口型 ${formatMs(job.lip_sync_ms)} · 编码 ${formatMs(job.encode_ms)} · 总计 ${formatMs(job.total_ms)}
             </div>
+            <div class="job-meta">后端：${backend}</div>
             <div class="job-text">${job.text}</div>
+            <div class="job-meta">阶段：${job.stage || job.status}${job.stage_detail ? ` · ${job.stage_detail}` : ""}</div>
           </div>
           <div class="badge ${badgeClass}">${job.status}</div>
         </article>

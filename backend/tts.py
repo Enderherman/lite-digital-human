@@ -5,11 +5,14 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from .common import AppConfig, PipelineStopped, split_chunks
+from .external import ExternalExecutionError, run_command
+from .runtime import ModelRegistry
 
 
 class SpeechBackend:
@@ -20,6 +23,81 @@ class SpeechBackend:
 
     def synthesize(self, text: str, wav_path: Path, stop_event: threading.Event, config: AppConfig) -> None:
         raise NotImplementedError
+
+
+class CosyVoiceBackend(SpeechBackend):
+    name = "cosyvoice"
+
+    def __init__(self, config: AppConfig, registry: ModelRegistry) -> None:
+        self.config = config
+        self.registry = registry
+        self.last_backend_name = ""
+
+    def _explicit_command(self) -> Optional[List[str]]:
+        return self.registry.launcher_command(
+            "cosyvoice",
+            script_candidates=["inference.py", "infer.py", "demo.py", "app.py"],
+        )
+
+    def _bridge_command(self) -> Optional[List[str]]:
+        weights_dir = self.registry.find_cosyvoice_weights()
+        if not self.registry.cosyvoice_bridge_script.exists():
+            return None
+        if not self.registry.cosyvoice_ready() or weights_dir is None:
+            return None
+        return [
+            sys.executable,
+            str(self.registry.cosyvoice_bridge_script),
+            "--repo-dir",
+            str(self.registry.cosyvoice_dir),
+            "--weights-dir",
+            str(weights_dir),
+        ]
+
+    def _command(self) -> Optional[List[str]]:
+        if os.getenv("DHD_COSYVOICE_CMD", "").strip() or os.getenv("DHD_COSYVOICE_SCRIPT", "").strip():
+            return self._explicit_command()
+        bridge = self._bridge_command()
+        if bridge is not None:
+            return bridge
+        return self._explicit_command()
+
+    def available(self) -> bool:
+        return self._command() is not None
+
+    def synthesize(self, text: str, wav_path: Path, stop_event: threading.Event, config: AppConfig) -> None:
+        command = self._command()
+        if command is None:
+            raise RuntimeError(
+                "CosyVoice backend is not configured. Place the official CosyVoice repo under models/CosyVoice and a matching pretrained_models directory, or set DHD_COSYVOICE_CMD."
+            )
+
+        wav_path.parent.mkdir(parents=True, exist_ok=True)
+        weights_dir = self.registry.find_cosyvoice_weights()
+        env = os.environ.copy()
+        env.update(
+            {
+                "DHD_TTS_TEXT": text,
+                "DHD_TTS_OUT": str(wav_path),
+                "DHD_TTS_RATE": str(config.tts_rate),
+                "DHD_COSYVOICE_REPO_DIR": str(self.registry.cosyvoice_dir),
+                "DHD_COSYVOICE_WEIGHTS_DIR": str(weights_dir or self.registry.cosyvoice_weights_dir),
+                "DHD_COSYVOICE_MODE": os.getenv("DHD_COSYVOICE_MODE", "auto"),
+                "DHD_COSYVOICE_MODEL_KIND": os.getenv("DHD_COSYVOICE_MODEL_KIND", ""),
+                "DHD_COSYVOICE_SPK_ID": os.getenv("DHD_COSYVOICE_SPK_ID", ""),
+                "DHD_COSYVOICE_PROMPT_TEXT": os.getenv("DHD_COSYVOICE_PROMPT_TEXT", ""),
+                "DHD_COSYVOICE_PROMPT_WAV": os.getenv("DHD_COSYVOICE_PROMPT_WAV", ""),
+                "DHD_COSYVOICE_INSTRUCT_TEXT": os.getenv("DHD_COSYVOICE_INSTRUCT_TEXT", ""),
+                "DHD_COSYVOICE_TEXT_FRONTEND": os.getenv("DHD_COSYVOICE_TEXT_FRONTEND", "1"),
+                "DHD_MODEL_DIR": str(self.registry.cosyvoice_dir),
+                "DHD_ASSETS_DIR": str(self.registry.assets_dir),
+                "DHD_OUTPUTS_DIR": str(self.registry.outputs_dir),
+            }
+        )
+        run_command(command, stop_event, cwd=self.registry.cosyvoice_dir, env=env)
+        if not wav_path.exists():
+            raise ExternalExecutionError("CosyVoice command completed but did not create the output wav file")
+        self.last_backend_name = "cosyvoice"
 
 
 class WindowsSpeechBackend(SpeechBackend):
@@ -63,6 +141,7 @@ try {
             text=True,
             check=True,
         )
+        self.last_backend_name = "windows-speech"
 
 
 class SyntheticSpeechBackend(SpeechBackend):
@@ -101,15 +180,19 @@ class SyntheticSpeechBackend(SpeechBackend):
                 )
                 sample = int(max(-32767, min(32767, sample * amplitude * 12000)))
                 wav_file.writeframesraw(struct.pack("<h", sample))
+        self.last_backend_name = "synthetic-tone"
 
 
 class CompositeSpeechBackend(SpeechBackend):
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, registry: ModelRegistry) -> None:
         self.config = config
-        self.backends = []
-        if config.prefer_windows_speech:
-            self.backends.append(WindowsSpeechBackend(config))
-        self.backends.append(SyntheticSpeechBackend())
+        self.registry = registry
+        self.last_backend_name = ""
+        self.backends = [
+            CosyVoiceBackend(config, registry),
+            WindowsSpeechBackend(config),
+            SyntheticSpeechBackend(),
+        ]
 
     @property
     def name(self) -> str:
@@ -123,6 +206,7 @@ class CompositeSpeechBackend(SpeechBackend):
             try:
                 if backend.available():
                     backend.synthesize(text, wav_path, stop_event, config)
+                    self.last_backend_name = getattr(backend, "last_backend_name", backend.name)
                     return
             except Exception as exc:
                 last_error = exc
